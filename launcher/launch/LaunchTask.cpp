@@ -41,6 +41,10 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
+#include <QDateTime>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QStandardPaths>
 #include <variant>
 #include "Commandline.h"
@@ -74,6 +78,7 @@ void LaunchTask::prependStep(shared_qobject_ptr<LaunchStep> step)
 void LaunchTask::executeTask()
 {
     m_instance->setCrashed(false);
+    m_launchProfileTimer.start();
     if (!m_steps.size()) {
         state = LaunchTask::Finished;
         emitSucceeded();
@@ -94,23 +99,148 @@ void LaunchTask::onStepFinished()
     // initial -> just start the first step
     if (currentStep == -1) {
         currentStep++;
-        m_steps[currentStep]->start();
+        startProfiledStep();
         return;
     }
 
     auto step = m_steps[currentStep];
-    if (step->wasSuccessful()) {
+    const bool stepSuccessful = step->wasSuccessful();
+    finishProfiledStep(stepSuccessful);
+    if (stepSuccessful) {
         // end?
         if (currentStep == m_steps.size() - 1) {
             finalizeSteps(true, QString());
         } else {
             currentStep++;
-            step = m_steps[currentStep];
-            step->start();
+            startProfiledStep();
         }
     } else {
         finalizeSteps(false, step->failReason());
     }
+}
+
+void LaunchTask::startProfiledStep()
+{
+    auto step = m_steps[currentStep];
+    m_profileStepName = QString::fromLatin1(step->metaObject()->className());
+    m_profileStepStartOffsetMs = m_launchProfileTimer.elapsed();
+    m_stepProfileTimer.start();
+    step->start();
+}
+
+void LaunchTask::finishProfiledStep(bool successful)
+{
+    // The game-launch step is measured until the child JVM starts, not while the player
+    // spends time in the game. Other preparation steps are measured to completion.
+    if (m_profileStepName.isEmpty()) {
+        return;
+    }
+
+    QJsonObject record;
+    record.insert("index", currentStep);
+    record.insert("step", m_profileStepName);
+    record.insert("started_at_ms", m_profileStepStartOffsetMs);
+    record.insert("duration_ms", m_stepProfileTimer.isValid() ? m_stepProfileTimer.elapsed() : 0);
+    record.insert("success", successful);
+    m_profileSteps.append(record);
+
+    m_profileStepName.clear();
+    m_profileStepStartOffsetMs = -1;
+}
+
+void LaunchTask::beginGameProcessProfile()
+{
+    if (!m_launchProfileTimer.isValid()) {
+        m_launchProfileTimer.start();
+    }
+    if (m_gameProcessTimer.isValid()) {
+        return;
+    }
+    m_gameProcessStartOffsetMs = m_launchProfileTimer.elapsed();
+    m_gameProcessTimer.start();
+}
+
+void LaunchTask::gameProcessStarted()
+{
+    if (m_gameProcessTimer.isValid() && m_gameProcessRunningOffsetMs < 0) {
+        m_gameProcessRunningOffsetMs = m_gameProcessTimer.elapsed();
+    }
+    finishProfiledStep(true);
+}
+
+void LaunchTask::gameProcessFinished(int exitCode)
+{
+    if (m_gameProcessTimer.isValid() && m_gameProcessEndOffsetMs < 0) {
+        m_gameProcessEndOffsetMs = m_gameProcessTimer.elapsed();
+        m_gameProcessExitCode = exitCode;
+    }
+}
+
+void LaunchTask::recordGameLogMilestones(const QString& line)
+{
+    if (!m_gameProcessTimer.isValid()) {
+        return;
+    }
+
+    const qint64 elapsedMs = m_gameProcessTimer.elapsed();
+    if (m_gameProcessFirstLogOffsetMs < 0) {
+        m_gameProcessFirstLogOffsetMs = elapsedMs;
+    }
+
+    const auto capture = [this, elapsedMs, &line](const QString& name, const QString& marker) {
+        if (m_seenProfileMilestones.contains(name) || !line.contains(marker, Qt::CaseInsensitive)) {
+            return;
+        }
+        m_seenProfileMilestones.insert(name);
+        QJsonObject milestone;
+        milestone.insert("name", name);
+        milestone.insert("elapsed_ms", elapsedMs);
+        m_profileMilestones.append(milestone);
+    };
+
+    // These are observable hints, not guaranteed lifecycle boundaries. They vary by
+    // Minecraft version, loader, and modpack.
+    capture("modlauncher_running", "ModLauncher running");
+    capture("resource_reload_started", "Reloading ResourceManager");
+    capture("texture_atlas_created", "textures-atlas");
+    capture("audio_initialized", "OpenAL initialized");
+    capture("world_spawn_preparation", "Preparing spawn area");
+    capture("integrated_server_ready_hint", "For help, type");
+}
+
+void LaunchTask::writeLaunchProfile()
+{
+    if (m_profileWritten || !m_launchProfileTimer.isValid()) {
+        return;
+    }
+    m_profileWritten = true;
+
+    const QString logsPath = QDir(m_instance->instanceRoot()).filePath("logs");
+    if (!QDir().mkpath(logsPath)) {
+        qWarning() << "Unable to create launch profile directory:" << logsPath;
+        return;
+    }
+
+    QJsonObject profile;
+    profile.insert("schema_version", 1);
+    profile.insert("captured_at_utc", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    profile.insert("launcher_preparation_ms",
+                   m_gameProcessStartOffsetMs >= 0 ? m_gameProcessStartOffsetMs : m_launchProfileTimer.elapsed());
+    profile.insert("process_start_to_running_ms", m_gameProcessRunningOffsetMs);
+    profile.insert("first_game_log_ms", m_gameProcessFirstLogOffsetMs);
+    profile.insert("game_process_lifetime_ms", m_gameProcessEndOffsetMs);
+    profile.insert("game_process_exit_code", m_gameProcessExitCode);
+    profile.insert("steps", m_profileSteps);
+    profile.insert("milestones", m_profileMilestones);
+
+    QFile file(QDir(logsPath).filePath("launch-profiles.jsonl"));
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        qWarning() << "Unable to write launch profile:" << file.fileName() << file.errorString();
+        return;
+    }
+
+    file.write(QJsonDocument(profile).toJson(QJsonDocument::Compact));
+    file.write("\n");
 }
 
 void LaunchTask::finalizeSteps(bool successful, const QString& error)
@@ -279,6 +409,10 @@ void LaunchTask::onLogLines(const QStringList& lines, MessageLevel defaultLevel)
 
 void LaunchTask::onLogLine(QString line, MessageLevel level)
 {
+    if (level == MessageLevel::StdOut || level == MessageLevel::StdErr) {
+        recordGameLogMilestones(line);
+    }
+
     if (parseXmlLogs(line, level)) {
         return;
     }
@@ -291,15 +425,24 @@ void LaunchTask::onLogLine(QString line, MessageLevel level)
 
 void LaunchTask::emitSucceeded()
 {
+    writeLaunchProfile();
     m_instance->setRunning(false);
     Task::emitSucceeded();
 }
 
 void LaunchTask::emitFailed(QString reason)
 {
+    writeLaunchProfile();
     m_instance->setRunning(false);
     m_instance->setCrashed(true);
     Task::emitFailed(reason);
+}
+
+void LaunchTask::emitAborted()
+{
+    writeLaunchProfile();
+    m_instance->setRunning(false);
+    Task::emitAborted();
 }
 
 QStringList LaunchTask::substituteVariables(QString& cmd, bool isLaunch) const
