@@ -143,8 +143,10 @@ void LauncherPartLaunch::executeTask()
         }
         emit logLine("Wrapper command is:\n" + wrapperCommandStr + "\n\n", MessageLevel::Launcher);
         args.prepend(javaPath);
+        m_parent->beginGameProcessProfile();
         m_process.start(wrapperCommand, wrapperArgs + args);
     } else {
+        m_parent->beginGameProcessProfile();
         m_process.start(javaPath, args);
     }
 
@@ -164,12 +166,14 @@ void LauncherPartLaunch::on_state(LoggedProcess::State state)
         case LoggedProcess::FailedToStart: {
             //: Error message displayed if instace can't start
             const char* reason = QT_TR_NOOP("Could not launch Minecraft: %1");
+            m_parent->gameProcessFinished(-1);
             emit logLine(QString(reason).arg(m_process.errorString()), MessageLevel::Fatal);
             emitFailed(tr(reason).arg(m_process.errorString()));
             return;
         }
         case LoggedProcess::Aborted:
         case LoggedProcess::Crashed: {
+            m_parent->gameProcessFinished(m_process.exitCode());
             m_parent->setPid(-1);
             m_parent->instance()->setMinecraftRunning(false);
             emitFailed(tr("Game crashed."));
@@ -185,6 +189,7 @@ void LauncherPartLaunch::on_state(LoggedProcess::State state)
             m_parent->instance()->setMinecraftRunning(false);
             // if the exit code wasn't 0, report this as a crash
             auto exitCode = m_process.exitCode();
+            m_parent->gameProcessFinished(exitCode);
             if (exitCode != 0) {
                 emitFailed(tr("Game crashed."));
                 return;
@@ -196,6 +201,7 @@ void LauncherPartLaunch::on_state(LoggedProcess::State state)
             break;
         }
         case LoggedProcess::Running:
+            m_parent->gameProcessStarted();
             emit logLine(QString("Minecraft process ID: %1\n\n").arg(m_process.processId()), MessageLevel::Launcher);
             m_parent->setPid(m_process.processId());
             // send the launch script to the launcher part

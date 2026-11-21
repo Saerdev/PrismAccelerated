@@ -1,3 +1,7 @@
+> **Prism Accelerated is an independent fork of Prism Launcher.** It is not Prism Launcher and is not endorsed by, affiliated with, or supported by the Prism Launcher project. The project follows Prism Launcher's GPL-3.0-only source license; original assets retain their respective licenses.
+>
+> This fork disables the upstream Imgur, Microsoft Identity Platform, and CurseForge API credentials in `CMakeLists.txt`. Integrations requiring those credentials will remain unavailable until the maintainer supplies credentials they are authorized to use and meets the respective provider terms.
+
 <p align="center">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="/program_info/org.prismlauncher.PrismLauncher.logo-darkmode.svg">
@@ -10,6 +14,28 @@
   Prism Launcher is a custom launcher for Minecraft that allows you to easily manage multiple installations of Minecraft at once.<br />
   <br />This is a <b>fork</b> of the MultiMC Launcher and is <b>not</b> endorsed by it.
 </p>
+
+## Current development milestone: launch profiling
+
+The `accelerator/launch-profiler-v0.1` branch adds local, per-instance launch timing to Prism's launch pipeline. This is an instrumentation-only prototype: it does not change JVM arguments, classpaths, Minecraft files, mod loading, or game behavior.
+
+After a launch process exits, the launcher appends one JSON object per run to:
+
+```text
+<instance game root>/logs/launch-profiles.jsonl
+```
+
+The profile records launcher preparation step durations, JVM process start-to-running delay, first process log output, selected log-message markers, and process exit information. It does not record raw log messages, account credentials, or send telemetry.
+
+Important interpretation notes:
+
+- `launcher_preparation_ms` is the offset from the start of Prism's launch task to the Java process start request.
+- `process_start_to_running_ms` measures process creation/handshake time. It is not the time until the Minecraft main menu.
+- `first_game_log_ms` and `milestones` are log-based observations, not authoritative lifecycle events.
+- `game_process_lifetime_ms` measures time from launching the Java process until it exits. It includes time spent playing and is **not** a startup duration.
+- Profiles are written when the launch task finishes, usually after the user exits the game.
+
+The prototype still needs a compile and runtime test against this fork. The next validation target is an unchanged ATM10 instance with several cold and warm launches, using identical Java settings and comparing these records with a dedicated Minecraft loading profiler.
 
 ## Installation
 

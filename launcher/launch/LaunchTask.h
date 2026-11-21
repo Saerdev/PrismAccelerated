@@ -38,6 +38,9 @@
 #pragma once
 #include <QObjectPtr.h>
 #include <minecraft/MinecraftInstance.h>
+#include <QElapsedTimer>
+#include <QJsonArray>
+#include <QSet>
 #include <QProcess>
 #include "LaunchStep.h"
 #include "LogModel.h"
@@ -86,6 +89,11 @@ class LaunchTask : public Task {
 
     shared_qobject_ptr<LogModel> getLogModel();
 
+    // Profiling hooks used by LauncherPartLaunch. They do not alter game startup.
+    void beginGameProcessProfile();
+    void gameProcessStarted();
+    void gameProcessFinished(int exitCode);
+
    public:
     QStringList substituteVariables(QString& cmd, bool isLaunch = false) const;
     QString censorPrivateInfo(QString in);
@@ -93,6 +101,7 @@ class LaunchTask : public Task {
    protected: /* methods */
     virtual void emitFailed(QString reason) override;
     virtual void emitSucceeded() override;
+    virtual void emitAborted() override;
 
    signals:
     /**
@@ -113,6 +122,10 @@ class LaunchTask : public Task {
 
    private: /*methods */
     void finalizeSteps(bool successful, const QString& error);
+    void startProfiledStep();
+    void finishProfiledStep(bool successful);
+    void recordGameLogMilestones(const QString& line);
+    void writeLaunchProfile();
 
    protected:
     bool parseXmlLogs(const QString& line, MessageLevel level);
@@ -127,4 +140,20 @@ class LaunchTask : public Task {
     qint64 m_pid = -1;
     LogParser m_stdoutParser;
     LogParser m_stderrParser;
+
+    // Monotonic timers avoid wall-clock changes skewing measurements.
+    QElapsedTimer m_launchProfileTimer;
+    QElapsedTimer m_stepProfileTimer;
+    QElapsedTimer m_gameProcessTimer;
+    QJsonArray m_profileSteps;
+    QJsonArray m_profileMilestones;
+    QSet<QString> m_seenProfileMilestones;
+    QString m_profileStepName;
+    qint64 m_profileStepStartOffsetMs = -1;
+    qint64 m_gameProcessStartOffsetMs = -1;
+    qint64 m_gameProcessRunningOffsetMs = -1;
+    qint64 m_gameProcessFirstLogOffsetMs = -1;
+    qint64 m_gameProcessEndOffsetMs = -1;
+    int m_gameProcessExitCode = -1;
+    bool m_profileWritten = false;
 };
