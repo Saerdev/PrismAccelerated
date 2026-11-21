@@ -215,7 +215,7 @@ void LaunchTask::writeLaunchProfile()
     }
     m_profileWritten = true;
 
-    const QString logsPath = QDir(m_instance->instanceRoot()).filePath("logs");
+    const QString logsPath = QDir(m_instance->gameRoot()).filePath("logs");
     if (!QDir().mkpath(logsPath)) {
         qWarning() << "Unable to create launch profile directory:" << logsPath;
         return;
