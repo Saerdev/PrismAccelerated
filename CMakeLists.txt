@@ -303,7 +303,7 @@ set(Launcher_BUILD_TIMESTAMP "${TODAY}")
 if(Launcher_QT_VERSION_MAJOR EQUAL 6)
     set(QT_VERSION_MAJOR 6)
     find_package(
-        Qt6 6.8
+        Qt6 6.11
         REQUIRED
         COMPONENTS
             Concurrent
