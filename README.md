@@ -1,3 +1,7 @@
+> **Prism Accelerated is an independent fork of Prism Launcher.** It is not Prism Launcher and is not endorsed by, affiliated with, or supported by the Prism Launcher project. The project follows Prism Launcher's GPL-3.0-only source license; original assets retain their respective licenses.
+>
+> This fork disables the upstream Imgur, Microsoft Identity Platform, and CurseForge API credentials in `CMakeLists.txt`. Integrations requiring those credentials will remain unavailable until the maintainer supplies credentials they are authorized to use and meets the respective provider terms.
+
 <p align="center">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="/program_info/org.prismlauncher.PrismLauncher.logo-darkmode.svg">
